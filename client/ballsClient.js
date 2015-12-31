@@ -20,52 +20,37 @@ let m_myPlayerId = 0;
 let m_debugTextLabel;
 let m_logTextLabel;
 
-let m_frameCount = 0;
-
 let m_serverTimeDifference = 0;
 let m_lag = 0;
-
+ 
 let m_hasCompleteConnection = false;
 let m_phaserCreated = false;
 
 
-// Streamy.onConnect(function(){
-//   m_hasFirstConnection = true;
-//   console.log("first connection");
-//   if(!m_hasCompleteConnection && m_phaserCreated){
-//     console.log("calling connect from streamy.onConnect");
-//     connectToServer();
-//   }
-// });
-
-
-Meteor.startup(function(){
-  console.log("meteor startup");
-  setTimeout(connectToServer, 300);
-//  connectToServer();
-});
-
-
-function connectToServer () {
+function registerClient () {
+  
+  console.log('calling register client');
+  
+  Meteor.call('registerClient', {someInitial:"stuff"}, function(err, data) {
     
-  let firstDataForConnection = {firstMessage:"salut grosse viande"};
-  console.log("calling toServer_Connect");
-  Streamy.emit("toServer_Connect", firstDataForConnection);
+    console.log('registerClient returns:', data);
+    m_myPlayerId = data.playerId;
+    
+    
+    if(!m_phaserCreated){
+      loadPhaserGame();
+    }
+
+  });
 
 }
 
+Meteor.startup(function(){
+  console.log("meteor startup");
 
+  registerClient();
+});
 
-Streamy.on("toClient_Connected", function(data) {
-  console.log("toClient_Connected playerId:", data.playerId);
-  m_myPlayerId = data.playerId;
-  m_hasCompleteConnection = true;
-  //log("this client connected:" + data.playerId);
-  
-  if(!m_phaserCreated){
-    loadPhaserGame();
-  }
-});  
 
   
 function loadPhaserGame() {
@@ -77,16 +62,7 @@ function loadPhaserGame() {
     let viewWidth = $(window).innerWidth();
     let viewHeight = $(window).innerHeight();
 
-    // let world = Worlds.findOne(); 
-    // if(world != undefined){
-    //   console.log("found world:", world);
-    //   height = world.height;
-    //   width = world.width;
-    // }
-    // else {
-    //   console.log("no world");
-    // }
-    console.log("view width and height:", viewWidth, viewHeight);
+    //console.log("view width and height:", viewWidth, viewHeight);
     m_game = new Phaser.Game(viewWidth, viewHeight, Phaser.AUTO, '', { create: create, update: update });
     console.log("phaser loaded");
   });
@@ -110,14 +86,6 @@ function create () {
 
   m_game.stage.disableVisibilityChange = true;
 
-  // let world = Worlds.findOne(); 
-  // if(world != undefined){
-  //   updateGameWorld(world);
-  // }
-  // else {
-  //   console.log("no world");
-  // }
-
   let x = 10;
   let y = 10;
   m_debugTextLabel = m_game.add.text(x, y += 20, '', { font: "16px Arial", fill: '#000000' });
@@ -129,15 +97,7 @@ function create () {
   //   world = Worlds.findOne();
   //   console.log("new width:", world.width);
   // });
-  // addButton(x, y += 20, "modify world2", function() {
-  //   log("modifying world");
-  //   let world = Worlds.findOne();
-  //   Worlds.update({_id:world._id}, {$set:{width:3000}});
-  //   world = Worlds.findOne();
-  //   console.log("new width:", world.width);
-  // });
 
-  
   m_logTextLabel = m_game.add.text(x, y+=20, '', { font: "16px Arial", fill: '#000000' });
 
   m_game.input.onDown.add(onMouseDown, this);
@@ -155,35 +115,21 @@ function create () {
   //   Streamy.broadcast("goumbaman", {playerId:m_myPlayerId, someData:"craphead"});
   // });
 
-  
- 
-  // addButton(x, y += 20, "send something to server", function() {
-  //   log("sending something to server");
-  //   Streamy.emit("helloToServer", {playerId:m_myPlayerId, someData:"hoyhoy"});
-  // });
-  
-
-  // if(!m_hasCompleteConnection){
-  //   console.log("finished creating phaser, connecting...");
-  //   connectToServer();
-  // }
 
   
   Players.find().observe({
     added: function(player){
-      //console.log("new player", player);
-      //log("new player:" + player._id);
+      console.log("new player", player);
+      log("new player:" + player._id);
     },
     removed: function(player){
       console.log("removed player", player);
-      log("client disconnected:" + player._id);
+      log("player disconnected:" + player._id);
     }
   });
 
   
   setInterval(updateOneSec, 1000);
-
-  //console.log(m_game.scale);
 }
 
 function resizeGame(){
@@ -193,10 +139,7 @@ function resizeGame(){
   console.log("width:", width);
   m_game.width = width;
   m_game.height = height;
-  //console.log(m_game.scale);
-  // m_game.scale.width = width;
-  // m_game.scale.height = height;
-  
+
   if (m_game.renderType === Phaser.WEBGL) {
   	m_game.renderer.resize(width, height);
   }
@@ -215,22 +158,7 @@ function updateGameWorld(world){
 
 
 Balls.find().observe({
-  // added: function(ball){
 
-  //   let ballId = ball._id;
-    
-  //   let clientBallView = m_game.add.graphics(0, 0);
-    
-  //   clientBallView.lineStyle(1, 0x000000);
-    
-  //   let ballRadius = ball.radius;
-     
-  //   clientBallView.drawCircle(0, 0, ballRadius);
-    
-  //   m_clientBallsView[ballId] = clientBallView;
- 
-  // },
-  
   removed: function(ball){
     console.log("removed ball", ball);
     //log("client disconnected:" + player._id);
@@ -257,39 +185,11 @@ Worlds.find().observe({
 });
 
 
-// Streamy.on("goumbaman", function(data) {
-//   log("receiving from " + data.playerId + ": " + data.someData);
-// });
-
-// Streamy.on("newPlayerConnection", function(data) {
-//   log("new player connection: " + data.playerId);
-// });
-
-// Streamy.on("pingFromServer", function(data) {
-//   //log("pingFromServer: " + data.pingCount);
-// });
-
-Meteor._debug = (function (super_meteor_debug) {
-  return function (error, info) {
-    if (info && _.has(info, 'msg')){
-      //super_meteor_debug("Streamy message is allowed!", info);
-    }
-    else {
-      super_meteor_debug(error, info);
-    }
-  };
-})(Meteor._debug);
-
-
 function addButton (x, y, buttonText, callback) {
   let btn = m_game.add.text(x, y, buttonText, { font: "16px Arial", fill: '#000000' });
   btn.inputEnabled = true;
   btn.events.onInputDown.add(callback, this);
 }
-
-// function onDebugTextLabelMouseDown () {
-//   log("button!\n");
-// }
 
 function onMouseDown () {
   //log("mouseDown\n");
@@ -300,8 +200,9 @@ function onMouseUp () {
 }
 
 function log (newLogText) {
-  m_logTextLabel.text = newLogText + "\n" + m_logTextLabel.text;
-  
+  if(m_phaserCreated){
+    m_logTextLabel.text = newLogText + "\n" + m_logTextLabel.text;
+  }
 }
 
 
@@ -309,32 +210,11 @@ function update () {
   
   updateMyPlayer();
   
-  
-  
-  
+
   let ballsArray = Balls.find({}).fetch();
   
   ballsArray.forEach(function (ball) {
     let ballId = ball._id;
-    
-    //update ball using player input
-    // if(ball.ballType == 'player')
-    // {
-    //   let playerId = ball.playerId;
-    //   let player = Players.findOne({_id:playerId});
-            
-    //   if(player != undefined &&
-    //     player.input.pointerPosition != undefined)
-    //   {
-    //     ball.position.x = player.input.pointerPosition.x;
-    //     ball.position.y = player.input.pointerPosition.y;
-    //     Balls.update({_id:ballId}, {$set:{position:ball.position}});
-    //   }
-    //   else
-    //   {
-    //     console.log("no player in ballplayer", ball);
-    //   }
-    // }
     
     // update ball view
     let clientBallView = m_clientBallsView[ballId];
@@ -354,24 +234,20 @@ function update () {
     
     clientBallView.position = ball.position;
       
-    
-    
   });
   
-  let serverTime = Date.now() + m_serverTimeDifference;
-  
-  m_frameCount++;
   m_game.time.advancedTiming = true;
   m_game.time.desiredFps = 30;
   
   
-  // m_debugTextLabel.setText(
-  //   //"server time: " + serverTime + 
-  //   //" server time difference: " + m_serverTimeDifference// + 
-  //   //" fps:" + m_game.time.fps +
-  //   " physicsElapsed:" + m_game.time.physicsElapsed + 
-  //   " elapsed:" + m_game.time.elapsed
-  //   );
+  m_debugTextLabel.setText(
+    "lag: " + m_lag
+    //"server time: " + serverTime + 
+    //" server time difference: " + m_serverTimeDifference// + 
+    //" fps:" + m_game.time.fps +
+    //" physicsElapsed:" + m_game.time.physicsElapsed + 
+    //" elapsed:" + m_game.time.elapsed
+    );
   
 }
 
@@ -473,24 +349,26 @@ function updateMyPlayer () {
   
 }
 
+function getServerTime(){
+  return Date.now() + m_serverTimeDifference;
+}
+
 
 function updateOneSec(){
 
   let myPlayer = getMyPlayer();
   if(myPlayer == undefined) {
-    console.log("no player..." );
-    if(m_phaserCreated){
-      console.log("trying to connect again to get a player...");
-      connectToServer();
-    }
+    console.log("no player... trying to connect again to get a player...");
+    registerClient();
+    return;
   }
 
+  Players.update({_id:m_myPlayerId}, {$set:{lastUpdateOneSecTime:getServerTime()}});
 
 
   let callTime = Date.now();
 
-  //console.log("calling getServerTimeInfo at time " + callTime);
-  Meteor.call("getServerTimeInfo", function(err, response) {
+  Meteor.call("clientToServerPingOneSec", {playerId:m_myPlayerId}, function(err, response) {
     if(!err) {
       //console.log("got response: ", response);
 
@@ -519,6 +397,7 @@ function updateOneSec(){
       //console.log("serverTimeDifference:", m_serverTimeDifference);
     }
   });
+  
   
  
   
