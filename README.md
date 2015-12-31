@@ -1,2 +1,2 @@
 # balls3
-game about balls
+game about balls and stuff
