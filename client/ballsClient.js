@@ -21,17 +21,34 @@ let m_debugTextLabel;
 let m_logTextLabel;
 
 let m_serverTimeDifference = 0;
+let m_serverTimeDifferenceComputed = false;
+
 let m_lag = 0;
+let m_smallestLagSinceStart = 10000;
+
  
-let m_hasCompleteConnection = false;
 let m_phaserCreated = false;
 
+let m_clientTimeOfLastRegisterClient = 0;
+let m_waitingForRegisterClient = false;
 
 function registerClient () {
+  
+  if(m_waitingForRegisterClient && 
+      m_clientTimeOfLastRegisterClient < Date.now() - 3000) {
+    
+    console.log("still waiting for registerclient. can't call again now");
+    return;
+  }
+  
+  m_waitingForRegisterClient = true;
+  m_clientTimeOfLastRegisterClient = Date.now();
   
   console.log('calling register client');
   
   Meteor.call('registerClient', {someInitial:"stuff"}, function(err, data) {
+    
+    m_waitingForRegisterClient = false;
     
     console.log('registerClient returns:', data);
     m_myPlayerId = data.playerId;
@@ -241,7 +258,7 @@ function update () {
   
   
   m_debugTextLabel.setText(
-    "lag: " + m_lag
+    "allo lag: " + m_lag
     //"server time: " + serverTime + 
     //" server time difference: " + m_serverTimeDifference// + 
     //" fps:" + m_game.time.fps +
@@ -267,6 +284,13 @@ function updateMyPlayer () {
   let myBall = Balls.findOne({_id:myPlayer.ballId});
   let myCursorBall = Balls.findOne({_id:myPlayer.cursorBallId});
   let myTargetBall = Balls.findOne({_id:myPlayer.targetBallId});
+
+  if(myBall == undefined ||
+      myCursorBall == undefined ||
+      myTargetBall == undefined) {
+  
+    return;
+  }
 
   let targetPosition = myTargetBall.position;
   
@@ -363,8 +387,9 @@ function updateOneSec(){
     return;
   }
 
-  Players.update({_id:m_myPlayerId}, {$set:{lastUpdateOneSecTime:getServerTime()}});
-
+  if(m_serverTimeDifferenceComputed){
+    Players.update({_id:m_myPlayerId}, {$set:{lastUpdateOneSecTime:getServerTime()}});
+  }
 
   let callTime = Date.now();
 
@@ -383,16 +408,24 @@ function updateOneSec(){
       
       let newServerTimeDifference = serverTime - now;
       
-      if(m_serverTimeDifference == 0) {
+      if(m_lag < m_smallestLagSinceStart){
+        m_smallestLagSinceStart = m_lag;
         m_serverTimeDifference = newServerTimeDifference;
+        m_serverTimeDifferenceComputed = true;
+        console.log("lag:", m_lag, " serverTimeDifference:", m_serverTimeDifference);
       }
-      else {
-        m_serverTimeDifference = Phaser.Math.linear(
-          m_serverTimeDifference, newServerTimeDifference, 0.1);
+      
+      // if(m_serverTimeDifference == 0) {
+      //   m_serverTimeDifference = newServerTimeDifference;
+      // }
+      // else {
+      //   m_serverTimeDifference = Phaser.Math.linear(
+      //     m_serverTimeDifference, newServerTimeDifference, 0.1);
           
-        //console.log(newServerTimeDifference, m_serverTimeDifference);
+      //   //console.log(newServerTimeDifference, m_serverTimeDifference);
 
-      }
+      // }
+      
       
       //console.log("serverTimeDifference:", m_serverTimeDifference);
     }

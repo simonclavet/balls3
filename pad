@@ -2,9 +2,9 @@
 meteor --port $IP:$PORT
 
 
-git add --all .
-git commit -m "some stuff"
-git push -u origin master
+git add --all . ; git commit -m "some stuff"; git push -u origin master
+
+
 
 
 meteor deploy balls3.meteor.com

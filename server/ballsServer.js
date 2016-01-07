@@ -111,7 +111,7 @@ function makeNewPlayer () {
 function removePlayer(playerId){
 
   var playerToRemove = Players.findOne({_id:playerId});
-  console.log("player to remove: ", playerToRemove);
+  console.log("player to remove: ", playerId);
   
   if(playerToRemove != undefined) {
   
