@@ -1,15 +1,16 @@
-
 /*global Phaser*/
 /*global Streamy*/
 /*global _*/
 /*global Players*/
 /*global Balls*/
+/*global BallStates*/
 /*global Worlds*/
 
 
 
-console.log("begin ballsclient.js");
 
+
+console.log("begin ballsclient.js");
 
 let m_game;
 
@@ -239,17 +240,55 @@ function update () {
     if(clientBallView == undefined)
     {
       //log("ballview undefined");
-      clientBallView = m_game.add.graphics(0, 0);
-      clientBallView.lineStyle(2, 0x000000);
+      let ballGraphics = m_game.add.graphics(0, 0);
+      clientBallView = {
+        ballGraphics: ballGraphics,
+        timeDelay: 0,
+      }
+      ballGraphics.lineStyle(2, 0x000000);
       
       let ballRadius = ball.radius;
        
-      clientBallView.drawCircle(0, 0, ballRadius);
+      ballGraphics.drawCircle(0, 0, ballRadius);
       
       m_clientBallsView[ballId] = clientBallView;
     }
     
-    clientBallView.position = ball.position;
+    let position = ball.position;
+    
+    let desiredTimeDelay = 0;
+    
+    if(ball.masterId != m_myPlayerId){
+      desiredTimeDelay = 300;
+    }
+    
+    let timeDelay = desiredTimeDelay;
+    clientBallView.timeDelay = timeDelay;
+    
+    if(clientBallView.timeDelay > 0) {
+      
+      let desiredTimeStamp = getServerTime() - timeDelay;
+      let ballStateClosestToDesiredTimeStamp = null;
+      let smallestError = 10000;
+      let ballStatesArray = BallStates.find({ballId:ball._id}).fetch();
+      
+      ballStatesArray.forEach(function(ballState){
+        
+        let timeError = Math.abs(ballState.timeStamp - desiredTimeStamp);        
+        
+        if(timeError < smallestError){
+          smallestError = timeError;
+          ballStateClosestToDesiredTimeStamp = ballState;
+        }
+      });
+      
+      if(ballStateClosestToDesiredTimeStamp != null){
+        position = ballStateClosestToDesiredTimeStamp.position;
+      }
+      
+    }
+    
+    clientBallView.ballGraphics.position = position;
       
   });
   
@@ -258,7 +297,7 @@ function update () {
   
   
   m_debugTextLabel.setText(
-    "allo lag: " + m_lag
+    "lag: " + m_lag
     //"server time: " + serverTime + 
     //" server time difference: " + m_serverTimeDifference// + 
     //" fps:" + m_game.time.fps +
@@ -311,10 +350,9 @@ function updateMyPlayer () {
   let inputChanged = false;
   
   if(!Phaser.Point.equals(pointerPosition, myCursorBall.position)) {
+
+    setBallPosition(myCursorBall, pointerPosition);
     
-    Balls.update({_id:myCursorBall._id}, {$set:{
-      position:pointerPosition}});
-  
     inputChanged = true;
   }
   
@@ -331,8 +369,7 @@ function updateMyPlayer () {
       if(pointerDown) {
         targetPosition = pointerPosition;
         
-        Balls.update({_id:myPlayer.targetBallId}, {$set:{
-          position:targetPosition}});
+        setBallPosition(myTargetBall, targetPosition);
       }
   }
 
@@ -362,15 +399,25 @@ function updateMyPlayer () {
     let disp = ballToTargetDir.setMagnitude(dispMag, dispMag);
     
     ballPos = Phaser.Point.add(ballPos, disp);
-    
-    Balls.update({_id:myPlayer.ballId}, {$set:{
-      position:ballPos}});
- 
+
+    setBallPosition(myBall, ballPos);    
+
   }
   
   m_game.camera.x = ballPos.x - m_game.width/2;
   m_game.camera.y = ballPos.y - m_game.height/2;
   
+}
+
+function setBallPosition(ball, position) {
+  Balls.update({_id:ball._id}, {$set:{
+    position:position}});
+    
+  BallStates.insert({
+    ballId:ball._id,
+    timeStamp:getServerTime(),
+    position:position
+  });
 }
 
 function getServerTime(){

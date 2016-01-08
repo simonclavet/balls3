@@ -2,6 +2,7 @@
 /*global Streamy*/
 /*global Players*/
 /*global Balls*/
+/*global BallStates*/
 /*global Worlds*/
 
    
@@ -10,7 +11,7 @@ Meteor.startup(function () {
   console.log("starting server");
   Players.remove({});
   Balls.remove({});
-  
+  BallStates.remove({});
   Worlds.remove({});
   
 
@@ -64,9 +65,23 @@ function updateOneSec() {
     }
   });
   
+  clearOldStates();
 } 
 
+function clearOldStates() {
 
+  let ballStatesArray = BallStates.find({}).fetch();
+  
+  // console.log("ballStatesCount:", ballStatesArray.length);
+  ballStatesArray.forEach(function(ballState){
+    
+    if(ballState.timeStamp < Date.now() - 3000) {
+      
+      // console.log("removing ballstate ", ballState);
+      BallStates.remove(ballState._id);
+    }
+  });  
+}
 
 function makeNewPlayer () {
 //  console.log("makeNewPlayer");
@@ -102,6 +117,11 @@ function makeNewPlayer () {
   };
   
   newPlayer._id = Players.insert(newPlayer);
+
+  Balls.update({_id:playerBallId}, {$set:{masterId:newPlayer._id}});
+  Balls.update({_id:cursorBallId}, {$set:{masterId:newPlayer._id}});
+  Balls.update({_id:targetBallId}, {$set:{masterId:newPlayer._id}});
+
 
   
   return newPlayer;
