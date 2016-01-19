@@ -12,10 +12,22 @@ function multiplyByScalar(v, a) {return {x: v.x*a, y:v.y*a};}
 function divideByScalar(v, a) {return {x: v.x/a, y:v.y/a};}
 function lerp(a, b, t) {return (1-t)*a + t*b;}
 // console.log(Vec2.multiplyByScalar({x:3, y:2}, 5));
-
-// function add(a, b) {return {x: a.x+b.x, y: a.y+b.y};}
-// function sub(a, b) {return {x: a.x-b.x, y: a.y-b.y};}
-// function dot(a, b) {return {x: a.x*b.x + a.y*b.y};}
+function square(a) {return a*a;}
+function add(a, b) {return {x: a.x+b.x, y: a.y+b.y};}
+function sub(a, b) {return {x: a.x-b.x, y: a.y-b.y};}
+function dot(a, b) {return a.x*b.x + a.y*b.y;}
+function clone(a) {return {x:a.x, y:a.y};}
+function sqDistance(a, b) {return square(a.x - b.x) + square(a.y - b.y);}
+function sqLength(a) {return dot(a,a)};
+function length(a) {return Math.sqrt(sqLength(a));}
+// function getDirAndLength(a) {
+// 	let len = length(a);
+// 	let dir = {x:1,y:0};
+// 	if(len > 0) {
+// 		dir = divideByScalar(a, len);
+// 	}
+// 	return {dir:dir, len:len};
+// }
 // function dot(a, b) {return {x: a.x*b.x + a.y*b.y};}
 
 
@@ -95,6 +107,12 @@ function create () {
 	let y = 10;
 	m_debugTextLabel = m_game.add.text(x, y += 20, '', { font: "16px Arial", fill: '#000000' });
 	m_debugTextLabel.fixedToCamera = true;
+	
+	addButton(x, y += 20, "rebuild environment", function() {
+		cleanEnvironment();
+		makeEnvironment();
+	});
+	
 	// addButton(x, y += 20, "modify world1", function() {
 	//   log("modifying world");
 	//   let world = Worlds.findOne();
@@ -282,6 +300,7 @@ function addButton (x, y, buttonText, callback) {
 	let btn = m_game.add.text(x, y, buttonText, { font: "16px Arial", fill: '#000000' });
 	btn.inputEnabled = true;
 	btn.events.onInputDown.add(callback, this);
+	btn.fixedToCamera = true;
 }
 
 function onMouseDown () {
@@ -334,7 +353,7 @@ function update () {
 
   let delaySinceLastPing = getServerTime() - m_timeOfLastPing;
 	if(!m_isWaitingForPingResponse &&
-			delaySinceLastPing > 50) {
+			delaySinceLastPing > 100) {
 		
 		// console.log("calling ping after", delaySinceLastPing);
 		ping();			
@@ -373,7 +392,7 @@ function updateReplicas() {
 		let targetTimeDelay = m_averageLag*2 + 300//30 + Math.min(0.3, timeSinceLastBallUpdateSec);
 
 		if(ball.futurePredictedSnapshot != null) {
-			targetTimeDelay = 0;
+			targetTimeDelay = 100;
 		}
 		
 		ballView.timeDelay = lerp(ballView.timeDelay, targetTimeDelay, 0.1);
@@ -409,7 +428,7 @@ function updateReplicas() {
 				let futurePosition = ball.futurePredictedSnapshot.position;
 				let arrivalTime = ball.futurePredictedSnapshot.timeStamp;
 				
-				let arrivalDelay = arrivalTime - now;
+				let arrivalDelay = arrivalTime - desiredBallViewTime;
 				//console.log(arrivalDelay, arrivalTime);
 				
 				if(arrivalDelay < dt) arrivalDelay = dt;
@@ -542,17 +561,83 @@ function updateMyBallViews () {
 		dispMag = ballToTargetMag;
 	}
 	
+	let newPlayerPosition = clone(playerBallPosition);
+	
 	if(dispMag > 0.0001) {
 		
 		let disp = ballToTargetDir.setMagnitude(dispMag, dispMag);
 		
-		playerBallPosition = Phaser.Point.add(playerBallPosition, disp);
+		newPlayerPosition = Phaser.Point.add(playerBallPosition, disp);
+	}
+	
+	
+	if(!Point.equals(playerBallPosition, newPlayerPosition)) {
 
-		setBallViewMasterPosition(myBallView, playerBallPosition);    
+		
+		let ballsArray = Balls.find({}).fetch();
+
+		for(let otherBall of ballsArray) {
+
+			if(otherBall.ballType != 'environment' &&
+					otherBall.ballType != 'player') {
+			
+				continue;
+			}
+			
+			if(otherBall._id == myBallView._id) {
+				continue;
+			}
+		
+			let otherBallView = m_clientBallViews.get(otherBall._id);
+			if(otherBallView == undefined) {
+				continue;
+			}
+			let otherBallViewPosition = otherBallView.graphics.position;
+			
+			let sqDist = sqDistance(otherBallViewPosition, newPlayerPosition);
+			let maxSqDist = square(otherBall.radius + myBall.radius);
+			
+			if(sqDist < maxSqDist) {
+				//console.log(sqDist, maxSqDist, otherBall.radius, myBall.radius);
+				//newPlayerPosition = {x:0, y:300};
+				
+				let fromOther = sub(newPlayerPosition, otherBallViewPosition);
+				let fromOtherMag = Math.sqrt(sqDist);
+				
+				let maxDist = Math.sqrt(maxSqDist);
+				
+				let penetrationMag = maxDist - fromOtherMag;
+				
+				let penetrationDir = {x:1, y:0};
+				if(fromOtherMag > 0) {
+					penetrationDir = divideByScalar(fromOther, fromOtherMag);
+				}
+				let colDisp = multiplyByScalar(penetrationDir, penetrationMag);
+				
+				newPlayerPosition = add(newPlayerPosition, colDisp);
+			}
+		
+		}
+		
+		
+		
+	}	
+	
+	
+	
+	ballToTargetVec = Phaser.Point.subtract(
+		targetBallPosition, newPlayerPosition);
+		
+	ballToTargetMag = ballToTargetVec.getMagnitude();
+	
+	if(!Point.equals(playerBallPosition, newPlayerPosition)) {
+		setBallViewMasterPosition(myBallView, newPlayerPosition); 
 	}
 	
 	let predictedArrivalTimeDelay = ballToTargetMag / m_playerBallSpeed; 
-	let predictedArrivalTime = getServerTime() + predictedArrivalTimeDelay;
+	
+	let timeAtFrameEnd = getServerTime() + dt;
+	let predictedArrivalTime = timeAtFrameEnd + predictedArrivalTimeDelay;
 	//console.log("arrivalTimeDelay:", predictedArrivalTimeDelay);
 	myBallView.futurePredictedSnapshot = {
 		position: targetBallPosition,
@@ -681,6 +766,16 @@ function checkForInitializeWorld(){
 
 function chooseMasters() {
 	
+	let ballsArray = Balls.find({}).fetch();
+	
+	for(let ball of ballsArray) {
+		//console.log(ball.masterId);
+		
+		if(ball.masterId != m_myPlayerId){
+		
+			
+		}
+	}
 }
 
 function initializeWorld(){
@@ -691,19 +786,33 @@ function initializeWorld(){
 }
 
 
+function cleanEnvironment() {
+	let ballsArray = Balls.find({}).fetch();
+	
+	for(let ball of ballsArray) {
+	
+		if(ball.ballType == 'environment') {
+
+			Balls.remove({_id:ball._id});
+			
+		}
+		
+	}
+}
+
 
 function makeEnvironment() {
   console.log("making environment");
   
   let world = Worlds.findOne();
   
-  let ballCount = 0;
+  let ballCount = 50;
   
   for(let i of ballCount) {
     //console.log(i);
     
     let position = {x:randomInRange(0, world.width), y:randomInRange(0, world.height)};
-    let radius = randomInRange(100, 300);
+    let radius = randomInRange(50, 150);
     
     Balls.insert(new Ball({
 	    ballType: 'environment',
@@ -714,12 +823,12 @@ function makeEnvironment() {
 
   }
   
-  Balls.insert(new Ball({
-  	ballType: 'disk',
-  	position: {x:300, y:300},
-  	radius: 30,
-  	color: 0xffffff
-  }));
+  // Balls.insert(new Ball({
+  // 	ballType: 'disk',
+  // 	position: {x:300, y:300},
+  // 	radius: 30,
+  // 	color: 0xffffff
+  // }));
 }
 
 
@@ -769,7 +878,7 @@ function makeBallView(ball) {
 	graphics.beginFill(color);
 	let ballRadius = ball.radius;
 	 
-	graphics.drawCircle(0, 0, ballRadius);
+	graphics.drawCircle(0, 0, ballRadius*2);
 
 	graphics.position = ball.position;
 	
@@ -813,14 +922,14 @@ function makeNewPlayer () {
   let playerBallId = Balls.insert(new Ball({
     ballType: 'player',
     position: {x:100, y:100},
-    radius: 60,
+    radius: 30,
     color: Phaser.Color.getRandomColor()
   }));
 
   let cursorBallId = Balls.insert(new Ball({
     ballType: 'cursor',
     position: {x:200, y:100},
-    radius: 10,
+    radius: 5,
     pointerDown: false,
     color: 0x000000
   }));
@@ -828,7 +937,7 @@ function makeNewPlayer () {
   let targetBallId = Balls.insert(new Ball({
     ballType: 'targetPosition',
     position: {x:200, y:200},
-    radius: 3,
+    radius: 1,
     color: 0x000000
   }));
   
