@@ -42,7 +42,10 @@ Meteor.startup(function () {
       return {serverTime: Date.now()};
     },
     
-    
+    ping: function(data) {
+      // console.log("ping");
+      return {serverTime: Date.now()};
+    },
     
     // registerClient: function(data) {
       

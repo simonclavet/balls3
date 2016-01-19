@@ -27,6 +27,7 @@ let m_game;
 let m_clientBallViews = new Map();
 
 let m_myPlayerId = 0;
+let m_myPlayer = null;
 
 let m_debugTextLabel;
 let m_logTextLabel;
@@ -38,61 +39,14 @@ let m_lag = 0;
 let m_averageLag = 0;
 let m_smallestLagSinceStart = 10000;
 
-let m_isFirstOneSecPingReturnFromServer = true;
-let m_isWaitingForServerPingOneSec = false;
- 
 let m_phaserCreated = false;
 
-let m_pendingBallStates = [];
+let m_timeOfLastPing = 0;
+let m_isWaitingForPingResponse = false;
+let m_receivedFirstPingReturnFromServer = false;
 
-// let m_clientTimeOfLastRegisterClient = 0;
-// let m_waitingForRegisterClient = false;
-//let m_myPlayerInitialized = false;
+let m_playerBallSpeed = 300 / 1000;
 
-// function registerClient () {
-	
-// 	if(m_waitingForRegisterClient && 
-// 			m_clientTimeOfLastRegisterClient < Date.now() - 3000) {
-		
-// 		console.log("still waiting for registerclient. can't call again now");
-// 		return;
-// 	}
-	
-// 	m_waitingForRegisterClient = true;
-// 	m_clientTimeOfLastRegisterClient = Date.now();
-	
-// 	console.log('calling register client');
-	
-// 	Meteor.call('registerClient', {someInitial:"stuff"}, function(err, data) {
-		
-// 		if(!err){
-// 			m_waitingForRegisterClient = false;
-			
-// 			console.log('registerClient returns:', data);
-// 			m_myPlayerId = data.playerId;
-			
-// 			let myPlayer = Players.findOne({_id:m_myPlayerId});
-// 			if(myPlayer == undefined){
-// 				console.log("returning from register client and new player not there yet...");
-// 			}
-// 			else {
-// 				console.log("returning from registerclient with player:", myPlayer);
-// 			  if(!m_myPlayerInitialized){
-// 				  initializeMyPlayer(myPlayer);
-// 			  }
-// 			}
-			
-// 			if(!m_phaserCreated){
-// 				loadPhaserGame();
-// 			}
-// 		}
-// 		else {
-// 			console.log("error in registerClient:", err);
-// 		}
-
-// 	});
-
-// }
 
 Meteor.startup(function(){
 	console.log("meteor startup");
@@ -167,9 +121,95 @@ function create () {
 	// });
 
 
-	setInterval(updateOneSec, 1000);
-	setInterval(sendReplicationInfo, 100);
+	//setInterval(updateOneSec, 1000);
+	//setInterval(sendReplicationInfo, 100);
+	
 }
+
+
+function ping() {
+
+	// if(getServerTime() > m_timeOfLastUpdateOneSec + 1000){
+	// 	m_timeOfLastUpdateOneSec = getServerTime();
+	// 	updateOneSec();
+	// }
+
+	if(m_serverTimeDifferenceComputed){
+		Players.update({_id:m_myPlayerId}, {$set:{lastUpdateOneSecTime:getServerTime()}});
+	}
+
+	m_myPlayer = getMyPlayer();
+	if(m_myPlayer == undefined &&
+		m_receivedFirstPingReturnFromServer) {
+		
+		console.log("no player...making a new one");
+		makeNewPlayer();
+		return;
+	}
+
+
+	checkBallViewsToRemoveAndAdd();
+	
+	if(m_myPlayer != undefined &&
+			m_myPlayer.isHost) {
+				
+		doHostStuff();
+	}
+
+
+	sendReplicationInfo();
+	
+	let pingCallTime = getServerTime();
+
+	m_isWaitingForPingResponse = true;
+	m_timeOfLastPing = pingCallTime;
+	
+	Meteor.call("ping", {}, function(err, response) {
+    // console.log("ping response:", response);
+    if(err) {
+    	console.log(err);
+    	return;
+    }
+		let returnTime = getServerTime();
+		
+		let tripTime = returnTime - pingCallTime;
+		let serverTime = response.serverTime;
+		//console.log("got response: ", response);
+		m_lag = tripTime / 2;
+		if(m_averageLag == 0){
+			m_averageLag = m_lag;
+		}
+		else {
+			m_averageLag = lerp(m_averageLag, m_lag, 0.1);
+		}
+		//console.log("lag:", m_lag);
+		
+		
+		if(m_lag < m_smallestLagSinceStart){
+			
+			let newServerTimeDifference = serverTime + m_lag - Date.now();
+
+			m_smallestLagSinceStart = m_lag;
+			m_serverTimeDifference = newServerTimeDifference;
+			m_serverTimeDifferenceComputed = true;
+			console.log("lag:", m_lag, " serverTimeDifference:", m_serverTimeDifference);
+		
+			if(!m_receivedFirstPingReturnFromServer){
+
+				m_receivedFirstPingReturnFromServer = true;
+				makeNewPlayer();
+				console.log("returning from first ping, making player...");
+			}
+			
+		}
+			
+		// console.log("tripTime:", tripTime);
+
+		m_isWaitingForPingResponse = false;
+	});
+
+}
+
 
 function resizeGame(){
 	let world = Worlds.findOne(); 
@@ -221,25 +261,6 @@ Players.find().observe({
 	}
 });
 
-// function initializeMyPlayer(player){
-// 	console.log("initializeMyPlayer");
-	
-// 	m_myPlayerInitialized = true;
-// }
-
-// Balls.find().observe({
-
-// 	removed: function(ball){
-// 		console.log("removed ball", ball);
-// 		//log("client disconnected:" + player._id);
-// 		if(m_clientBallViews.get(ball._id) != undefined) {
-// 			m_clientBallViews.get(ball._id).destroy();
-// 			m_clientBallViews.remove(ball._id);
-// 		}
-// 	}
-// });
-
-
 
 Worlds.find().observe({
 	added: function(world) {
@@ -280,11 +301,14 @@ function log (newLogText) {
 
 function update () {
 	
-	if(m_isFirstOneSecPingReturnFromServer){
-		return;
-	}
+	// if(m_isWaitingForFirstPingReturnFromServer){
+	// 	return;
+	// }
 	
 //	updateMyPlayer();
+
+	m_myPlayer = getMyPlayer();
+
 	updateMyBallViews();
 	
 	updateReplicas();
@@ -293,21 +317,35 @@ function update () {
 	m_game.time.advancedTiming = true;
 	m_game.time.desiredFps = 30;
 	
-	
-	m_debugTextLabel.setText(
-		"lag: " + m_averageLag.toFixed(0)
+	let text = "lag: " + m_averageLag.toFixed(0)
 		//"server time: " + serverTime + 
 		//" server time difference: " + m_serverTimeDifference// + 
 		+ "  fps:" + m_game.time.fps
 		+ " dt:" + m_game.time.physicsElapsedMS.toFixed(1)
-		//+ " elapsed:" + m_game.time.elapsed.toFixed(3)
-		);
-	
+		//+ " elapsed:" + m_game.time.elapsed.toFixed(3) ;
+
+	if(m_myPlayer != undefined &&
+			m_myPlayer.isHost) {
+				
+		text += " host";
+	}
+
+	m_debugTextLabel.setText(text);
+
+  let delaySinceLastPing = getServerTime() - m_timeOfLastPing;
+	if(!m_isWaitingForPingResponse &&
+			delaySinceLastPing > 50) {
+		
+		// console.log("calling ping after", delaySinceLastPing);
+		ping();			
+	}
 }
 
 function updateReplicas() {
 	//return;
 	let ballsArray = Balls.find({}).fetch();
+	
+	let dt = m_game.time.physicsElapsedMS;
 	
 	for(let ball of ballsArray) {
 		
@@ -332,8 +370,11 @@ function updateReplicas() {
 		
 		let now = getServerTime();
 		//let timeSinceLastBallUpdateSec = now - ball.timeStamp;
-		let targetTimeDelay = 300;//m_averageLag*2//30 + Math.min(0.3, timeSinceLastBallUpdateSec);
+		let targetTimeDelay = m_averageLag*2 + 300//30 + Math.min(0.3, timeSinceLastBallUpdateSec);
 
+		if(ball.futurePredictedSnapshot != null) {
+			targetTimeDelay = 0;
+		}
 		
 		ballView.timeDelay = lerp(ballView.timeDelay, targetTimeDelay, 0.1);
 
@@ -341,86 +382,70 @@ function updateReplicas() {
 		//let timeFromTimeStampToDesiredViewTime = desiredBallViewTime - ball.timeStamp;
 		
 		
-		let closestSnapshot = null;
-		let closestSnaphsotTimeError = 10000;
-		
+		let closestSnapshot = {timeStamp:ball.timeStamp, position:ball.position};
+		let closestSnaphsotTimeError = Math.abs(ball.timeStamp - desiredBallViewTime);
+		let foundSnapshot = false;
 		for(let snapshot of ball.snapshots) {
 			let timeError = Math.abs(snapshot.timeStamp - desiredBallViewTime);
 			
 			if(timeError < closestSnaphsotTimeError) {
 				closestSnaphsotTimeError = timeError;
 				closestSnapshot = snapshot;
+				foundSnapshot = true;
 			}
 		}
 		
-		let newViewPosition = realPosition;
+		let targetViewPosition = realPosition;
 		
-		if(closestSnapshot != null) {
-			newViewPosition = closestSnapshot.position;
+		if(foundSnapshot) {
+			targetViewPosition = closestSnapshot.position;
+			//console.log("found snapshot with error", closestSnaphsotTimeError, ball.snapshots.length);
+		}
+		
+		if(ball.futurePredictedSnapshot != null) {
+			
+			if(ball.timeStamp < desiredBallViewTime) {
+				
+				let futurePosition = ball.futurePredictedSnapshot.position;
+				let arrivalTime = ball.futurePredictedSnapshot.timeStamp;
+				
+				let arrivalDelay = arrivalTime - now;
+				//console.log(arrivalDelay, arrivalTime);
+				
+				if(arrivalDelay < dt) arrivalDelay = dt;
+				let completeDispToDo = Point.subtract(futurePosition, viewPosition);
+				
+				let completeDispToDoMag = completeDispToDo.getMagnitude();
+				
+				let desiredSpeed = completeDispToDoMag/arrivalDelay;
+				
+				let maximumSpeed = m_playerBallSpeed * 1.5;
+				if(desiredSpeed > maximumSpeed) {
+					desiredSpeed = maximumSpeed;
+				}
+				
+				let dispThisFrame = completeDispToDo.normalize();
+				
+				dispThisFrame.setMagnitude(desiredSpeed*dt);
+				
+				targetViewPosition = Point.add(viewPosition, dispThisFrame);
+			}
 		}
 		
 		
-		
-		
-		// let delayBeforeShouldBeAtBallPosition = ball.timeStamp - desiredBallViewTime;
+		let delayBeforeShouldBeAtBallPosition = dt;//ball.timeStamp - desiredBallViewTime;
 		
 		// if(delayBeforeShouldBeAtBallPosition < 30){
 		// 	delayBeforeShouldBeAtBallPosition = 30;
 		// }
 		
-		// let desiredCompleteDisp = Point.subtract(realPosition, viewPosition);
+		let desiredCompleteDisp = Point.subtract(targetViewPosition, viewPosition);
 		
-		// let desiredVel = divideByScalar(desiredCompleteDisp, delayBeforeShouldBeAtBallPosition);
+		let desiredVel = divideByScalar(desiredCompleteDisp, delayBeforeShouldBeAtBallPosition);
 
-		// let dt = m_game.time.physicsElapsedMS;
+		let desiredDisp = multiplyByScalar(desiredVel, dt);
 		
-		// let desiredDisp = multiplyByScalar(desiredVel, dt);
-		
-		// let newViewPosition = Point.add(viewPosition, desiredDisp);		
-		
-		
-		
-		
-		
-		
-		//console.log(delayBeforeShouldBeAtBallPosition);
-// 		let predictedPositionDifference = new Phaser.Point();
-// 		predictedPositionDifference.copyFrom(ball.velocity);
-// 		predictedPositionDifference.x *= timeFromTimeStampToDesiredViewTime;
-// 		predictedPositionDifference.y *= timeFromTimeStampToDesiredViewTime;
-// 		//console.log(ball.velocity)
-// //			multiplyByScalar(ball.velocity, timeDifference);
-			
-// 		position = Point.add(position, predictedPositionDifference);
-		
-		//let desiredTimeDelay = 0;
-		
-		
-		// let timeDelay = desiredTimeDelay;
-		// clientBallView.timeDelay = timeDelay;
-		
-		// if(clientBallView.timeDelay > 0) {
-			
-		// 	let desiredTimeStamp = getServerTime() - timeDelay;
-		// 	let ballStateClosestToDesiredTimeStamp = null;
-		// 	let smallestError = 10000;
-		// 	let ballStatesArray = BallStates.find({ballId:ball._id}).fetch();
-			
-		// 	ballStatesArray.forEach(function(ballState){
-				
-		// 		let timeError = Math.abs(ballState.timeStamp - desiredTimeStamp);        
-				
-		// 		if(timeError < smallestError){
-		// 			smallestError = timeError;
-		// 			ballStateClosestToDesiredTimeStamp = ballState;
-		// 		}
-		// 	});
-			
-		// 	if(ballStateClosestToDesiredTimeStamp != null){
-		// 		position = ballStateClosestToDesiredTimeStamp.position;
-		// 	}
-			
-		// }
+		let newViewPosition = Point.add(viewPosition, desiredDisp);		
 		
 		if(!Phaser.Point.equals(viewPosition, newViewPosition)){
 			ballView.graphics.position = newViewPosition;
@@ -436,13 +461,12 @@ function getMyPlayer () {
 
 function updateMyBallViews () {
 	
-	let myPlayer = getMyPlayer();
-	if(myPlayer == undefined) {
+	if(m_myPlayer == undefined) {
 		return;
 	}
-	let myBall = Balls.findOne({_id:myPlayer.ballId});
-	let myCursorBall = Balls.findOne({_id:myPlayer.cursorBallId});
-	let myTargetBall = Balls.findOne({_id:myPlayer.targetBallId});
+	let myBall = Balls.findOne({_id:m_myPlayer.ballId});
+	let myCursorBall = Balls.findOne({_id:m_myPlayer.cursorBallId});
+	let myTargetBall = Balls.findOne({_id:m_myPlayer.targetBallId});
 
 	if(myBall == undefined ||
 			myCursorBall == undefined ||
@@ -451,9 +475,9 @@ function updateMyBallViews () {
 		return;
 	}
 
-	let myBallView = m_clientBallViews.get(myPlayer.ballId);
-	let myCursorBallView = m_clientBallViews.get(myPlayer.cursorBallId);
-	let myTargetBallView = m_clientBallViews.get(myPlayer.targetBallId);
+	let myBallView = m_clientBallViews.get(m_myPlayer.ballId);
+	let myCursorBallView = m_clientBallViews.get(m_myPlayer.cursorBallId);
+	let myTargetBallView = m_clientBallViews.get(m_myPlayer.targetBallId);
 
 	if(myBallView == undefined ||
 			myCursorBallView == undefined ||
@@ -502,9 +526,6 @@ function updateMyBallViews () {
 		}
 	}
 
-
-
-
 	
 	let ballToTargetVec = Phaser.Point.subtract(
 		targetBallPosition, playerBallPosition);
@@ -514,10 +535,9 @@ function updateMyBallViews () {
 	let ballToTargetDir = Phaser.Point.normalize(
 		ballToTargetVec.clone());
 		
-	let speed = 300;
-	let dt = m_game.time.physicsElapsed;
+	let dt = m_game.time.physicsElapsedMS;
 	
-	let dispMag = speed*dt;
+	let dispMag = m_playerBallSpeed*dt;
 	if(dispMag > ballToTargetMag) {
 		dispMag = ballToTargetMag;
 	}
@@ -531,6 +551,14 @@ function updateMyBallViews () {
 		setBallViewMasterPosition(myBallView, playerBallPosition);    
 	}
 	
+	let predictedArrivalTimeDelay = ballToTargetMag / m_playerBallSpeed; 
+	let predictedArrivalTime = getServerTime() + predictedArrivalTimeDelay;
+	//console.log("arrivalTimeDelay:", predictedArrivalTimeDelay);
+	myBallView.futurePredictedSnapshot = {
+		position: targetBallPosition,
+		timeStamp: predictedArrivalTime
+	};
+	
 	let width = $(window).innerWidth();
 	let height = $(window).innerHeight();
 
@@ -540,42 +568,12 @@ function updateMyBallViews () {
 }
 
 
-
-
-
-function setBallPosition(ball, position) {
-	Balls.update({_id:ball._id}, {$set:{
-		position:position}});
-		
-	BallStates.insert({
-		ballId:ball._id,
-		timeStamp:getServerTime(),
-		position:position
-	});
-}
-
-
 function setBallViewMasterPosition(ballView, position) {
 	//console.log("position:", position);
 	ballView.graphics.position = position;
 	
 	ballView.pendingSnapshots.push(
 		makeBallSnapshot(ballView));
-		
-	// m_pendingBallStates.push({
-	// 	ballId:ballView._id,
-	// 	timeStamp:getServerTime(),
-	// 	position:position
-	// });
-	
-	// Balls.update({_id:ball._id}, {$set:{
-	// 	position:position}});
-		
-	// BallStates.insert({
-	// 	ballId:ball._id,
-	// 	timeStamp:getServerTime(),
-	// 	position:position
-	// });
 }
 
 
@@ -619,7 +617,6 @@ function sendReplicationInfo(){
 
 		let oldPosition = ball.position;
 		let newPosition = ballView.graphics.position;
-		let now = getServerTime();
 		let bigDt = now - ball.timeStamp
 		if(bigDt < 1) bigDt = 1;
 		
@@ -628,171 +625,61 @@ function sendReplicationInfo(){
 		velocity.y /= bigDt;
 		//console.log(velocity)
 
+		let changedSomething = false;
+
 		if(!Phaser.Point.equals(oldPosition, newPosition) ||
 				!Phaser.Point.equals(ball.velocity, velocity) ){
-			
-			Balls.update({_id:ballId}, {$set:{
-		 		position:newPosition,
-				velocity:velocity,
-				timeStamp:now
-			}});
+			changedSomething = true;
 
 		}
 
-
+		let newSnapshots = [];
 		
-		// remove old snapshots
-//		let snapshotsToRemove = [];
 		for(let snapshot of ball.snapshots) {
-			if(snapshot.timeStamp < now - 500) {
-	
-				Balls.update({_id:ballId}, {
-					$pull: {snapshots: {timeStamp:snapshot.timeStamp}}
-				});
-
-			}
-		}
-		
-		// if(snapshotsToRemove.length > 0) {
-		// 	//console.log("removing snapshot of time", snapshot.timeStamp);
-		// 	});
-		// }
-		
-
-
-		let pendingSnapshots = ballView.pendingSnapshots;
-		
-		
-		if(pendingSnapshots.length != 0){
-			
-			//console.log(ball.snapshots.length);
-
-			Balls.update({_id:ballId}, {
-				$push: {snapshots: {$each: pendingSnapshots}}
-			});
-		}
-		
-		ballView.pendingSnapshots = [];
-
-
-		// let changedSnapshotList = false;
-		// let oldSnapshots = ball.replicationSnapshots;
-		
-		// let newSnapshots = [];
-		
-		// for(let oldSnapshot of oldSnapshots){
-		// 	if(oldSnapshot.timeStamp > now - 1000){
-		// 		newSnapshots.push(oldSnapshot);
-		// 	}
-		// }
-		
-		// for(let newSnapshot of ballView.pendingSnapshots){
-		// 	newSnapshots.push(newSnapshot);
-		// }
-
-		// if(oldSnapshots.length != 0 ||
-		// 		newSnapshots.length != 0){
-			
-		// 	Balls.update({_id:ballId}, {$set:{
-		// 		replicationSnapshots:newSnapshots
-		// 	}});
-
-		// 	console.log("sending ", newSnapshots)
-
-		// }
-		
-	
-	}
-
-
-}
-
-
-
-function updateOneSec(){
-
-	let myPlayer = getMyPlayer();
-	if(myPlayer == undefined &&
-		!m_isWaitingForServerPingOneSec &&
-		!m_isFirstOneSecPingReturnFromServer) {
-		
-		console.log("no player...making a new one");
-		makeNewPlayer();
-		return;
-	}
-
-	if(m_serverTimeDifferenceComputed){
-		Players.update({_id:m_myPlayerId}, {$set:{lastUpdateOneSecTime:getServerTime()}});
-	}
-
-	let callTime = Date.now();
-	m_isWaitingForServerPingOneSec = true;
-	Meteor.call("clientToServerPingOneSec", {playerId:m_myPlayerId}, function(err, response) {
-		if(!err) {
-			let serverTime = response.serverTime;
-			//console.log("got response: ", response);
-			m_isWaitingForServerPingOneSec = false;
-			m_lag = (Date.now() - callTime) / 2;
-			if(m_averageLag == 0){
-				m_averageLag = m_lag;
+			if(snapshot.timeStamp > now - 1000) {
+				newSnapshots.push(snapshot);
 			}
 			else {
-				m_averageLag = lerp(m_averageLag, m_lag, 0.1);
+				changedSomething = true;
 			}
-			//console.log("lag:", m_lag);
-			
-			
-			if(m_lag < m_smallestLagSinceStart){
-				
-				let newServerTimeDifference = serverTime + m_lag - Date.now();
-
-				m_smallestLagSinceStart = m_lag;
-				m_serverTimeDifference = newServerTimeDifference;
-				m_serverTimeDifferenceComputed = true;
-				console.log("lag:", m_lag, " serverTimeDifference:", m_serverTimeDifference);
-			
-				if(m_isFirstOneSecPingReturnFromServer){
-
-					m_isFirstOneSecPingReturnFromServer = false;
-					console.log("returning from first onesec ping, making player...");
-					makeNewPlayer();
-				}
-				
-			}
-			
-			// if(m_serverTimeDifference == 0) {
-			//   m_serverTimeDifference = newServerTimeDifference;
-			// }
-			// else {
-			//   m_serverTimeDifference = Phaser.Math.linear(
-			//     m_serverTimeDifference, newServerTimeDifference, 0.1);
-					
-			//   //console.log(newServerTimeDifference, m_serverTimeDifference);
-
-			// }
-			
-			
-			//console.log("serverTimeDifference:", m_serverTimeDifference);
 		}
-	});
-	checkBallViewsToRemoveAndAdd();
-	
+
+		if(ballView.pendingSnapshots.length != 0){
+			for(let snapshot of ballView.pendingSnapshots) {
+				newSnapshots.push(snapshot);
+				changedSomething = true;
+			}
+		}
+		ballView.pendingSnapshots = [];
+
+		if(changedSomething) {
+			//console.log("changedSomething");
+			Balls.update({_id:ballId}, {$set:{
+		 		position: newPosition,
+				velocity: velocity,
+				timeStamp: now,
+				snapshots: newSnapshots,
+				futurePredictedSnapshot: ballView.futurePredictedSnapshot
+			}});
+		}
+	}
+}
+
+function doHostStuff() {
 	checkForInitializeWorld();
+	chooseMasters();
 }
 
 function checkForInitializeWorld(){
-	let myPlayer = getMyPlayer();
-	if(myPlayer == undefined) return;
-	
-	if(myPlayer.isHost){
-		//console.log("ishost");
-		let world = Worlds.findOne();
-	
-		if(!world.isInitialized){
-			
-			initializeWorld();
-		}	
-	}
+	let world = Worlds.findOne();
+
+	if(!world.isInitialized){
+		
+		initializeWorld();
+	}	
+}
+
+function chooseMasters() {
 	
 }
 
@@ -826,6 +713,13 @@ function makeEnvironment() {
 	  }));
 
   }
+  
+  Balls.insert(new Ball({
+  	ballType: 'disk',
+  	position: {x:300, y:300},
+  	radius: 30,
+  	color: 0xffffff
+  }));
 }
 
 
@@ -879,17 +773,25 @@ function makeBallView(ball) {
 
 	graphics.position = ball.position;
 	
-	let clientBallView = {
+	let clientBallView = new BallView({
 		_id: ball._id,
 		graphics: graphics,
-		timeDelay: 0,
-		hasBall: true,
-		pendingSnapshots: []
-	};
+	});
 	
 	m_clientBallViews.set(ball._id, clientBallView);
 	
 	return clientBallView;
+}
+
+
+function BallView(props) {
+	this._id = props._id || 0;
+	this.graphics = props.graphics || null;
+	this.timeDelay = props.timeDelay || 0;
+	this.hasBall = props.hasBall || true;
+	this.pendingSnapshots = props.pendingSnapshots || [];
+	this.futurePredictedSnapshot = props.futurePredictedSnapshot || null;
+	return this;
 }
 
 function Ball(props) {
@@ -901,7 +803,7 @@ function Ball(props) {
 	this.timeStamp = props.timeStamp || 0;
 	this.masterId = 0;
 	this.snapshots = [];
-	
+	this.futurePredictedSnapshot = props.futurePredictedSnapshot || null;
 	return this;
 }
 
